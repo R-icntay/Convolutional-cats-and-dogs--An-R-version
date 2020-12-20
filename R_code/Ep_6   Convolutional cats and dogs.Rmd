@@ -1,0 +1,545 @@
+---
+title: ' '
+output:
+  html_document:
+    css: style_2.css
+    df_print: paged
+    theme: readable
+    highlight: breezedark
+    toc: yes
+    toc_float: yes
+    code_download: TRUE
+    includes:
+      after_body: footer.html
+  html_notebook:
+    toc: yes
+---
+
+# **Convolutional cats and dogs:** An R version
+
+Hello! Welcome to the sixth **R** code walkthrough of the session ***Machine Learning Foundations*** where the awesome [Laurence Moroney](https://www.linkedin.com/in/laurence-moroney),a Developer Advocate at Google working on Artificial Intelligence, takes us through the fundamentals of building machine learned models using TensorFlow.
+
+In this episode, [Episode 6](https://www.youtube.com/watch?v=nq7_ZYJPWf0), Laurence Moroney takes us through yet another exciting application of Machine Learning.
+Here, we take what we learned about Convolutional Neural Networks in the previous few episodes and apply them to a computer vision scenario that was a Kaggle challenge not long ago--building a classifier for cats and dogs!
+
+Like the previous [R Notebooks](rpubs.eR_ic), this Notebook tries to replicate the [Python Notebook](https://colab.research.google.com/github/lmoroney/mlday-tokyo/blob/master/Lab6-Cats-v-Dogs.ipynb) used for this episode. The Python Notebook for this session is particularly exciting since it show you how to create and manipulate directories within google colab itself, so you definitely should check it out.
+
+Before we begin, I highly recommend that you go through [Episode 6](https://www.youtube.com/watch?v=nq7_ZYJPWf0) first then you can come back and implement these concepts using R. I will try and highlight some of the stuff Laurence Moroney said and add some of my own for the sake of completeness of this post but I highly recommend you listen from him first.
+
+<br>
+
+Let's start by loading the libraries required for this session.
+
+We'll be requiring some packages in the EBImage, Tidyverse and Keras(a framework for defining a neural network as a set of Sequential layers). You can have them installed as follows:
+
+For the [Tidyverse](https://www.tidyverse.org/), install the complete tidyverse with:
+```
+suppressMessages(install.packages("tidyverse"))
+```
+
+<br>
+
+[EBImage](https://bioconductor.org/packages/3.11/bioc/html/EBImage.html) is an R package distributed as part of the [Bioconductor](http://bioconductor.org/) project. To install the package, start R and enter:
+```
+install.packages("BiocManager")
+BiocManager::install("EBImage")
+```
+<br>
+The Keras R interface uses the TensorFlow backend engine by default. An elegant doucumentation for the installation of both the core Keras library as well as the TensorFlow backend can be found on the [R interface to Keras](https://keras.rstudio.com/reference/install_keras.html) website.
+
+
+
+
+The Data set can be downloaded from here,[Dogs vs. Cats dataset](https://www.microsoft.com/en-us/download/confirmation.aspx?id=54765). It's quite a large dataset and could take some time.
+
+<br>
+
+# **Copying images to training and test directories**
+
+Before we get into all things `convolutions`, `pooling` and `image generators`, let's first do some processing on the data.
+Unlike the previous `horses-or-humans` dataset, you will notice that this one isn't split into training and validation directories. It only has a `PetImages` folder which contains `Cat` and `Dog` folders within it.
+This can be seen as below:
+
+```{r}
+list.dirs(path = "C:/Users/keras/Documents/cats-and-dogs",
+          full.names = TRUE, recursive = TRUE)
+
+```
+
+Let's list how many files are in there:
+
+```{r}
+PetImages <- list.dirs(path = "C:/Users/keras/Documents/cats-and-dogs/PetImages",
+                       full.names = TRUE, recursive = FALSE)
+
+sapply(PetImages, function(dir){length(list.files(dir))})
+
+```
+Perfect. Let's now create our own directories:
+
+A cats and dogs master directory which contains training and testing sub-directories, each of which will host the cats and dogs folders.
+
+```{r}
+base_dir <- "C:/Users/keras/Documents/cats-v-dogs"
+dir.create(base_dir)
+train_dir <- file.path(base_dir, "training")
+dir.create(train_dir)
+test_dir <- file.path(base_dir, "testing")
+dir.create(test_dir)
+train_cats_dir <- file.path(train_dir, "cats")
+dir.create(train_cats_dir)
+train_dogs_dir <- file.path(train_dir, "dogs")
+dir.create(train_dogs_dir)
+test_cats_dir <- file.path(test_dir, "cats")
+dir.create(test_cats_dir)
+test_dogs_dir <- file.path(test_dir, "dogs")
+dir.create(test_dogs_dir)
+
+# defining our source directories i.e the folders that contains the cats and dogs images
+
+cat_source_dir <- "C:/Users/keras/Documents/cats-and-dogs/PetImages/Cat"
+dog_source_dir <- "C:/Users/keras/Documents/cats-and-dogs/PetImages/Dog"
+
+
+```
+Awesome. We have just split the data into `Training` and `Validation` directories, and each of these contain the `cats` and `dogs` sub-directories.
+We will then train a classifier on cats and dogs images using a generator which pulls images from the `training sub-directories`. The classifier will then validate its accuracy using a generator which pulls images from the `validation-subdirectories`. This can be shown briefly as:
+
+```{r, echo=FALSE, fig.align='center', fig.cap= "Image source: Machine Learning Foundations: Ep #6", fig.width=11}
+library(knitr)
+knitr::include_graphics("C:/Users/keras/Downloads/tf.JPG")
+
+```
+
+<br>
+It wouldn't be that bad if we took a peep at some of these furry creatures(I couldn't help it 🐾).
+
+```{r, fig.width=11}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(EBImage)
+  library(knitr)
+})
+
+
+# listing the files in the cat_source_dir and dog_source_dir
+cats_disp <- list.files(path = cat_source_dir,
+                        pattern = ".jpg", full.names = T) %>%
+              sample(size = 4, replace = F)
+
+dogs_disp <- list.files(path = dog_source_dir,
+                        pattern = ".jpg", full.names = T) %>%
+              sample(size = 4, replace = F)
+img_disp <- sample(c(cats_disp,dogs_disp))
+
+# resizing the images since readImage {EBImage} requires all images
+# to have same dimension and color mode
+
+for (i in seq_along(img_disp)) {
+  readImage(img_disp[i]) %>%
+    resize(w = 300, h = 300) %>%
+    writeImage(img_disp[i])
+  
+}
+
+EBImage::display(
+  readImage(img_disp),
+  method = 'raster',
+  all = T,
+  nx = 4,
+  spacing = c(0,0)
+)
+
+# maybe you are wondering if this will affect the performance of our NN
+# worry not, later, we will use the image generator
+# to resize all images to a common dimension.
+```
+
+
+
+
+
+Now, let's write a function that drops corrupt images, randomizes the images a little bit, splits the images into `training` and `testing` sets and copies them into new folders that will be used by the image generators.
+Let's get right into it, shall we?
+
+
+
+```{r}
+
+split_data <- function(source_dir, training_dest, testing_dest, split_size){
+  
+# obtaining a character vector containing the image paths
+files <- list.files(path = source_dir, full.names = T)
+size <- file.size(files)
+
+# removing any corrupt images based on the image size
+shuffled_set <- cbind (files, size) %>%
+  subset(size > 0, select = c(files)) %>%
+  as.character() %>% 
+  # randomizing our data a little
+  sample(replace = F)
+
+# splitting our data such that _% goes to training and _% goes to testing
+training_length <- length(shuffled_set) * split_size
+testing_length <- length(shuffled_set) * (1 - split_size)
+
+training_set <- shuffled_set[1:training_length]
+testing_set <- shuffled_set[(training_length+1):length(shuffled_set)]
+
+# copying the training and testing sets into their appropriate destination folders
+# wrapping the function in: invisible {base} to prevent printing of 11,250 TRUE/FALSE :)
+
+invisible (file.copy(from = training_set, to = training_dest))
+invisible (file.copy(from = testing_set, to = testing_dest))
+
+  
+}
+
+
+# splitting cat images
+split_data(source_dir = cat_source_dir,
+           training_dest = train_cats_dir,
+           testing_dest = test_cats_dir,
+           split_size = 0.9)
+
+
+# splitting dog images
+split_data(source_dir = dog_source_dir,
+           training_dest = train_dogs_dir,
+           testing_dest = test_dogs_dir,
+           split_size = 0.9)
+
+
+# sanity check
+cat("Total training cat images:", length(list.files(train_cats_dir)), '\n')
+cat("Total testing cat images:", length(list.files(test_cats_dir)), '\n')
+
+cat("Total training dog images:", length(list.files(train_dogs_dir)), '\n')
+cat("Total testing dog images:", length(list.files(test_dogs_dir)), '\n')
+
+# Voila!
+```
+<br>
+
+# **Building your network**
+
+Very quickly, from the previous sessions:
+A `convolution` is a filter that passes over an image, processing it, and extracting features that show a commonolatity in the image such that if an image has certain features, it belongs to a particular class. Convolutional layers learn the features and pass these to the dense layers which map the learned features to the given labels.
+
+<br>
+`Pooling` reduces the amount of irrelevant information in an image while maintaining the features that are detected.
+
+
+
+
+### **Instantiating a Convolution**
+
+We’ll reuse the same general structure: the convnet will be a stack
+of alternated layer_conv_2d (with relu activation) and layer_max_pooling_2d
+stages.
+You will notice that as we go deeper, we increase the number of filters. This is because convolutions can learn spatial hierarchies of patterns. A first convolution layer will learn small local patterns such as edges, a second convolution layer will learn larger patterns made of the features of the first layers, and so on. This allows convnets to efficiently learn increasingly complex and abstract visual concepts
+
+```{r}
+library(keras)
+
+model <- keras_model_sequential() %>%
+  # adding the first convolution layer with 16 3by3 filters
+  # we add an additional dimension in the input shape since convolutions operate over 3D tensors
+  # the input shape tells the network that the first layer should expect
+  # images of 150 by 150 pixels with a color depth of 3 ie RGB images
+  layer_conv_2d(input_shape = c(150, 150, 3), filters = 16, kernel_size = c(3, 3), activation = 'relu') %>%
+  # adding a max pooling layer which halves the dimensions
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+   # adding a second convolution layer with 32 filters
+  layer_conv_2d(filters = 32, kernel_size = c(3, 3), activation = 'relu') %>%
+  # adding a pooling layer
+  layer_max_pooling_2d(pool_size = c(2, 2)) %>%
+  # increasing number of filters as image size decreases
+  layer_conv_2d(filters = 64, kernel_size = c(3, 3), activation = 'relu') %>%
+  layer_max_pooling_2d(pool_size = c(2, 2))
+  
+```
+
+<br>
+
+### **Adding a classifier to the convnet**
+
+Convolutional layers learn the features and pass these to the dense layers which map the learned features to the given labels. Therefore, the next step is to feed the last output tensor into a densely connected classifier network like those we’re already familiar with: a stack of dense layers.
+These classifiers process vectors, which are 1D, however, the current output is a 3D tensor. First we have to flatten the 3D outputs to 1D, and then add a few dense layers on top.
+
+Note that because we are facing a two-class classification problem, i.e. a binary classification problem, we will end our network with a [sigmoid activation](https://en.wikipedia.org/wiki/Sigmoid_function), so that the output of our network will be a single scalar between 0 and 1, encoding the probability that the current image is class 1 (as opposed to class 0). For more information about Keras activation functions, kindly visit the [Keras website](https://keras.io/api/layers/activations/).
+
+```{r}
+model <- model %>%
+  layer_flatten() %>%
+  layer_dense(units = 512, activation = 'relu') %>%
+  layer_dense(units = 1, activation ='sigmoid')
+
+
+# Let’s look at how the dimensions of the feature maps change with every successive layer:
+
+model %>% summary()
+```
+
+
+Sigmoid is equivalent to a 2-element Softmax, therefore, with a binary classification problem like this, you can get away with only 1 neuron and a sigmoid activation function which pushes values between 0 for one class and 1 for the other class.
+
+<br>
+
+**Compile:** Configuring a Keras model for training
+
+```{r}
+model %>%
+  compile(
+    loss = 'binary_crossentropy',
+    optimizer = optimizer_rmsprop(lr = 0.001),
+    metrics = 'accuracy'
+  )
+```
+
+Binary_ Crossentropy loss Computes the cross-entropy loss between true labels and predicted labels. Typically used when there are only two label classes.(For a refresher on loss metrics, see the [Machine Learning Crash Course](https://developers.google.com/machine-learning/crash-course/descending-into-ml/video-lecture) and the [Keras documentation](https://keras.io/api/losses/probabilistic_losses/#binary_crossentropy-function)) 
+
+<br>
+
+# **Data preprocessing**
+
+Now that we have the data, we should format it into appropriately preprocessed floating-point tensors before being fed into the network.
+So the steps for getting it into the network are roughly as follows:
+
+1. Read the picture files.
+2. Decode the JPG content to RGB grids of pixels.
+3. Convert these into floating-point tensors.
+4. Normalize the pixel values to the [0, 1] interval (It is uncommon to feed raw pixels into a convnet).
+5. Autolabel the images of cats and dogs automatically based on the subdirectory name: - ImageGenerator will label the images appropriately for you, reducing a coding step. Sounds neat, right?
+
+It may seem a bit daunting, but thankfully Keras has utilities to turn image files on disk into batches of pre-processed tensors. Such image processing tools include the function `image_data_generator`.
+<br><br>
+
+```{r}
+# normalizing the data by multipling by a rescaling factor
+train_datagen <- image_data_generator(rescale = 1/255)
+
+# Flow training images in batches of 250 using train_datagen generator
+
+train_generator <- flow_images_from_directory(
+  # target directory
+  directory = train_dir,
+  # training data generator
+  generator = train_datagen,
+  # resizing the images to the same dimensions expected by our NN
+  target_size = c(150, 150),
+  # 250 images at a time to be fed into the NN
+  batch_size = 250,
+  # Since we use binary_crossentropy loss, we need binary label arrays
+  class_mode = 'binary'
+)
+```
+Seems we had a data base file in each of the cats and dogs training folders. Luckily that will not affect anything since they haven't been recognized as images.
+<br><br>
+Maybe some few things to point out that could result into bugs:
+
+1. The `directory` is the parent directory folder that contains the labels sub-directories.
+2. For `class_mode` if you only have two classes keep it as `binary`, if you have more than two classes, keep it `categorical`.
+
+Let's do the same for the validation dataset
+<br><br>
+```{r}
+validation_datagen <- image_data_generator(rescale = 1/255)
+
+validation_generator <- flow_images_from_directory(
+  # target directory
+  directory = test_dir,
+  # testing data generator
+  generator = validation_datagen,
+  # resizing the images to the same dimensions expected by our NN
+  target_size = c(150, 150),
+  # 250 images at a time to be fed into the NN
+  batch_size = 250,
+  # Since we use binary_crossentropy loss, we need binary label arrays
+  class_mode = 'binary'
+)
+```
+
+<br>
+
+# **Training the Neural Network**
+
+This is the process of training the neural network, where it 'learns' the relationship between the train_images and train_labels arrays.
+
+Let’s fit the model to the data using the generator. You do so using the
+`fit_generator {keras}` function, the equivalent for `fit` for data generators like this one. It expects as its first argument a generator that will yield batches of inputs and targets indefinitely. Because the data is being generated endlessly, the model needs to know how many samples to draw from the generator before declaring an epoch over. This is the role of the `steps_per_epoch` argument. It defines the total number of steps (batches of samples) to yield from generator before declaring one epoch finished and starting the next epoch. It should *typically* be equal to the *number of samples in your dataset divided by the batch size*.
+
+`validation_steps` describes the total number of steps (batches of samples) to yield from generator before stopping at the end of every epoch. It tells the network how many batches to draw from the validation generator for evaluation.
+
+`An epoch finishes when steps_per_epoch batches have been seen by the model.`
+
+<br>
+
+ **Fitting the model using a batch generator**
+ 
+Let's train for 15 epochs -- this may take a few minutes to run.
+
+The Loss and Accuracy are a great indication of progress of training. It's making a guess as to the classification of the training data, and then measuring it against the known label, calculating the result. Accuracy is the portion of correct guesses.
+<br><br>
+
+```{r}
+history <- model %>% fit_generator(
+  generator = train_generator,
+  # Total number of steps (batches of samples) to yield
+  #before declaring one epoch finished and starting the next epoch.
+  steps_per_epoch = 90,
+  # An epoch is an iteration over the entire data provided
+  epochs = 15,
+  validation_data = validation_generator,
+  validation_steps = 5
+  
+  
+)
+
+# It’s good practice to always save your models after training.
+
+model %>% save_model_hdf5("cats_and_dogs.h5") 
+
+# plotting the loss and accuracy over the training and validation data
+# during training
+plot(history)
+
+# A summary of how the model performed
+history
+
+```
+
+These plots show a characteristic of overfitting: the fact that machine learning models tend to perform worse on new data than on their training data. It occurs when the network ends up learning representations that are specific to the training data and doesn't generalize to data outside of the training set. This can be improved using `image augmentation` right up in the next [episode](https://www.youtube.com/watch?v=QWdYWwW6OAE).
+
+
+# **Generating predictions on new data/our own data**
+
+What's the fun of building this NN if we can't try it on our own pets, right?😸
+
+We'll download some images of cats and dogs and see how well our model classifies these images it has never seen before.
+From this exercise's Python Notebook the `image_load {keras}` and `image_to_array {keras}` were used. These can easily be implemented in R too.
+For this post, I have opted for `predict_generator {keras}`. 
+
+<br>
+
+**Implementing a data generator for the test images**
+
+```{r}
+fun_dir <- file.path(base_dir, "my_test_images")
+dir.create(fun_dir)
+
+# sub-folder in `my_test_images` that contains the images
+my_cats_dogs_dir <- file.path(fun_dir, "my_images")
+dir.create(my_cats_dogs_dir)
+
+# copying downloaded images to `my_cats_dogs` directory
+download_imgs <- list.files(path = "C:/Users/keras/Downloads",
+                        pattern = ".jpg",
+                        full.names = T )
+
+invisible(file.copy(from = download_imgs, to = my_cats_dogs_dir))
+
+```
+
+
+<br>
+
+```{r}
+test_datagen <- image_data_generator(rescale = 1/255)
+
+test_generator <- flow_images_from_directory(
+  directory = fun_dir,
+  generator = test_datagen,
+  target_size = c(150, 150),
+  batch_size = 10,
+  class_mode = 'binary',
+  shuffle = F
+)
+```
+
+
+
+**Generating predictions for the test samples from a data generator.**
+
+```{r}
+predictions <- model %>% predict_generator(
+  steps = 1,
+  generator = test_generator,
+  verbose = 0
+)
+
+image_labels <- list.files(path = my_cats_dogs_dir)
+
+pred_results <- as.data.frame(cbind(image_labels, predictions)) %>%
+  rename("prediction" = 2) %>%
+  mutate("predicted_class" = if_else(prediction>0.5,print("dog"),print("cat")),
+         prediction = as.double(prediction))
+
+
+```
+
+
+Below are the images I used:
+
+```{r,fig.cap= "Image source: pexels.com"}
+my_images <- list.files(my_cats_dogs_dir, full.names = T)
+
+# resizing the images to a common dimension as required by readImage{EBImage}
+for (i in seq_along(my_images)) {
+  readImage(my_images[i]) %>%
+    resize(w = 2500, h = 2500) %>%
+    writeImage(my_images[i])
+
+    
+}
+
+EBImage::display(
+  readImage(my_images),
+  method = 'raster',
+  all = T,
+  nx = 3,
+  spacing = c(0,0)
+)
+
+
+```
+
+Predictions made by the model that trained for 15 epochs
+
+```{r}
+
+pred_results
+```
+
+
+Not bad! With some few tweaks here and there, the model can be optimized to perform better. Anyhow, we'll leave it at that, for now.😊
+
+
+<br>
+
+Convnets work by learning a hierarchy of modular patterns and concepts to
+represent the visual world. As you go higher, the activations become increasingly abstract and less visually interpretable. They begin to encode higher­level concepts such as “cat ear” and “cat eye.” Higher presentations carry increasingly less information about the visual contents of the image, and increasingly more information related to the class of the image.
+
+Again, we have made it this far 🏆! Pretty, awesome. Convnets aren't so 'black-boxes'. You can go ahead and visualize Intermediate Representations to see how an input gets transformed as it goes through a convnet's filters as we did in the [previous episode](https://rpubs.com/eR_ic/mlr_5).
+
+That's all for now.
+Happy Learning!  👩🏽‍💻 👨‍💻 👨🏾‍💻 👩‍💻
+
+# **Reference Material**
+
+* Machine Learning Foundations: Ep #6 - [Convolutional cats and dogs](https://www.youtube.com/watch?v=nq7_ZYJPWf0)
+
+* Deep Learning with R by Francois Chollet and J.J.Allaire
+
+* The [R interface to Keras](https://keras.rstudio.com/articles/tutorial_basic_classification.html) website.
+
+* The [Keras API Reference](https://keras.io/api/) website
+
+* Lab 6: [Lab6-Cats-v-Dogs.ipynb](https://colab.research.google.com/github/lmoroney/mlday-tokyo/blob/master/Lab6-Cats-v-Dogs.ipynb#scrollTo=7v55rWlQehzL) 
+
+
+
+
+
+
+
